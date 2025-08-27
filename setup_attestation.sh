@@ -76,12 +76,13 @@ main() {
   # tpm2_evictcontrol -C o -c "${AK_CTX}" 0x81010002 -Q
 
   # --- Health check: take a tiny quote to confirm everything works -----------
+  # to be added, add a quote -q just to check for the key to work
   PCRS="sha256:0,7"
   QUOTE="${WORKDIR}/selftest_quote.bin"
   SIG="${WORKDIR}/selftest_sig.bin"
   TPMS="${WORKDIR}/selftest_tpms.bin"
   log "Self-test quote on ${PCRS}..."
-  tpm2_quote -c "${AK_CTX}" -l "${PCRS}" -q "bootstrap" -m "${TPMS}" -s "${SIG}" -o "${QUOTE}"
+  tpm2_quote -c "${AK_CTX}" -l "${PCRS}" -m "${TPMS}" -s "${SIG}" -o "${QUOTE}"
 
   log "Setup complete. EK/AK generated:"
   log "  EK_CTX=${EK_CTX}"
