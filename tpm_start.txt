@@ -1,0 +1,20 @@
+# creation of the dir for the TPM
+
+mkdir /tmp/mytpm1
+swtpm socket --tpmstate dir=/tmp/mytpm1 \
+  --ctrl type=unixio,path=/tmp/mytpm1/swtpm-sock \
+  --tpm2 \
+  --log level=20
+
+# start the VM for sonic 
+
+qemu-system-x86_64 \
+  -display gtk \
+  -accel kvm -m 4096 -boot d -bios bios-256k.bin -boot menu=on \
+  -chardev socket,id=chrtpm,path=/tmp/mytpm1/swtpm-sock \
+  -tpmdev emulator,id=tpm0,chardev=chrtpm \
+  -device tpm-tis,tpmdev=tpm0 \
+  -monitor stdio \
+  sonic-vs.img  
+  
+# tpm2-tools is present tpm2-tss no 
