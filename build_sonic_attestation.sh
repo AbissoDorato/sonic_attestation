@@ -48,7 +48,6 @@ check_dependencies() {
         "libjson-c-dev"
         "swtpm"
         "tpm2-tools"
-        "docker.io"
         "openssl"
         "jq"
     )
