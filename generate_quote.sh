@@ -1,101 +1,114 @@
-#!/usr/bin/env sh
-# SONiC quote generator (QEMU+swtpm) — uses saved AK at /var/lib/sonic/attestation
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
-# ---- Paths from your setup (as in your log) ----
-ATTEST_DIR="${ATTEST_DIR:-/var/lib/sonic/attestation}"
-EK_CTX="${EK_CTX:-$ATTEST_DIR/ek.ctx}"
-AK_CTX="${AK_CTX:-$ATTEST_DIR/ak.ctx}"
-AK_NAME="${AK_NAME:-$ATTEST_DIR/ak.name}"
-# Optional persistent handle to reuse if available:
-AK_HANDLE="${AK_HANDLE:-0x81000010}"
+# --- config / defaults ---
+: "${CONF:=/etc/sonic/attestation/attestation.conf}"
+: "${STATE_DIR:=/var/lib/sonic/attestation}"
+: "${PCR_NUMBER:=9}"
+: "${HALG:=sha256}"
+: "${AK_CTX:=${STATE_DIR}/ak.ctx}"
+: "${AK_PUB:=${STATE_DIR}/ak.pub}"
 
-# ---- Output ----
-OUT_DIR="${OUT_DIR:-$ATTEST_DIR/out}"
-PCR_LIST="${PCR_LIST:-sha256:0,2,7}"
-NONCE_BYTES="${NONCE_BYTES:-32}"
+[ -f "$CONF" ] && source "$CONF"
 
-log() { printf '%s\n' "[$(date +'%F %T')] $*"; }
-die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+# Prefer resource manager device when present
+if [ -e /dev/tpmrm0 ] && [ -z "${TPM2TOOLS_TCTI:-}" ]; then
+  export TPM2TOOLS_TCTI="device:/dev/tpmrm0"
+fi
 
-detect_tcti() {
-  if [ -c /dev/tpmrm0 ]; then echo "device:/dev/tpmrm0"; return; fi
-  if [ -c /dev/tpm0 ];   then echo "device:/dev/tpm0";   return; fi
-  die "No TPM device found (/dev/tpmrm0 or /dev/tpm0). Check your QEMU -tpmdev/-device flags."
+# --- args ---
+NONCE_HEX="${1:-$(openssl rand -hex 20)}"
+OUT_DIR="${2:-${STATE_DIR}/measurements/quote_$(date +%Y%m%d_%H%M%S)}"
+mkdir -p "$OUT_DIR"
+
+# Files
+QUOTE_MSG="${OUT_DIR}/quote.msg"
+QUOTE_SIG="${OUT_DIR}/quote.sig"
+QUOTE_TK="${OUT_DIR}/quote.tk"
+PCRS_YAML="${OUT_DIR}/pcrs.yaml"
+META_JSON="${OUT_DIR}/quote_meta.json"
+
+# Helpers to handle version diffs across tpm2-tools
+has_opt_quote() { tpm2_quote -h 2>&1 | grep -q -- "$1"; }
+has_opt_pcrread_L() { tpm2_pcrread -h 2>&1 | grep -q " -L,"; }
+
+# tpm2_quote changed -l/-L across versions; detect
+QUOTE_PCR_OPT="-L"; has_opt_quote " -L," || QUOTE_PCR_OPT="-l"
+
+command -v tpm2_quote >/dev/null
+command -v tpm2_pcrread >/dev/null
+[ -f "$AK_CTX" ] || { echo "AK context not found at $AK_CTX" >&2; exit 1; }
+[ -f "$AK_PUB" ] || { echo "AK public not found at $AK_PUB" >&2; exit 1; }
+
+SEL="${HALG}:${PCR_NUMBER}"
+
+# ---- Evidence binding (qualifying data) ----
+# Choose which files define your "measurement bundle" (stable, canonicalized)
+# Example: measurements.json + normalized routing dump + bios/kver summaries
+BUNDLE_FILES=()
+[ -f "${OUT_DIR}/measurements.json" ] && BUNDLE_FILES+=("${OUT_DIR}/measurements.json")
+[ -f "${OUT_DIR}/routing.txt" ]       && BUNDLE_FILES+=("${OUT_DIR}/routing.txt")
+[ -f "${OUT_DIR}/kernel.txt" ]        && BUNDLE_FILES+=("${OUT_DIR}/kernel.txt")
+[ -f "${OUT_DIR}/bios.txt" ]          && BUNDLE_FILES+=("${OUT_DIR}/bios.txt")
+
+# Create a reproducible manifest (name + sha256) and a single bundle hash
+MANIFEST="${OUT_DIR}/evidence_manifest.txt"
+> "$MANIFEST"
+for f in "${BUNDLE_FILES[@]}"; do
+  # hash only content; include stable file names to avoid reordering ambiguity
+  printf "%s  %s\n" "$(sha256sum "$f" | awk '{print tolower($1)}')" "$(basename "$f")" >> "$MANIFEST"
+done
+BUNDLE_HASH="$(sha256sum "$MANIFEST" | awk '{print tolower($1)}')"
+
+# Mix in your random nonce to prevent replay; store both for the verifier
+echo -n "$NONCE_HEX" > "${OUT_DIR}/nonce.txt"
+printf "%s:%s" "$NONCE_HEX" "$BUNDLE_HASH" > "${OUT_DIR}/qual.bin"
+
+
+
+
+# ---- Dump PCRs (portable) ----
+if has_opt_pcrread_L; then
+  # Newer tools: tpm2_pcrread -L sha256:9
+  tpm2_pcrread -L "$SEL" > "$PCRS_YAML"
+else
+  # Older tools: tpm2_pcrread sha256:9
+  tpm2_pcrread "$SEL" > "$PCRS_YAML"
+fi
+
+if tpm2_quote -h 2>&1 | grep -q " -o,"; then
+  tpm2_quote \
+    -c "$AK_CTX" \
+    "${QUOTE_PCR_OPT}" "$SEL" \
+    -g "$HALG" \
+    -q "$NONCE_HEX" \
+    -m "$QUOTE_MSG" \
+    -s "$QUOTE_SIG" \
+    -o "$QUOTE_TK"
+else
+  tpm2_quote \
+    -c "$AK_CTX" \
+    "${QUOTE_PCR_OPT}" "$SEL" \
+    -g "$HALG" \
+    -q "$NONCE_HEX" \
+    -m "$QUOTE_MSG" \
+    -s "$QUOTE_SIG"
+fi
+
+# ---- Metadata ----
+cat > "$META_JSON" <<EOF
+{
+  "timestamp": "$(date -Is)",
+  "ak_pub": "${AK_PUB}",
+  "pcr_selection": "${SEL}",
+  "nonce_hex": "${NONCE_HEX}",
+  "quote_msg": "$(basename "$QUOTE_MSG")",
+  "quote_sig": "$(basename "$QUOTE_SIG")",
+  "quote_ticket": "$(basename "$QUOTE_TK")",
+  "pcrs_yaml": "$(basename "$PCRS_YAML")",
+  "hash_alg": "${HALG}"
 }
+EOF
 
-need_tools() {
-  for x in tpm2_getcap tpm2_quote tpm2_pcrread tpm2_readpublic jq base64; do
-    command -v "$x" >/dev/null 2>&1 || die "Missing tool: $x"
-  done
-}
-
-pick_ak_ref() {
-  # Prefer your saved AK context file; else persistent handle if valid
-  if [ -s "$AK_CTX" ]; then
-    echo "$AK_CTX"
-    return
-  fi
-  if tpm2_readpublic -c "$AK_HANDLE" >/dev/null 2>&1; then
-    echo "$AK_HANDLE"
-    return
-  fi
-  die "No AK found. Expected $AK_CTX or persistent $AK_HANDLE. Run setup_attestation.sh first."
-}
-
-main() {
-  need_tools
-  mkdir -p "$OUT_DIR"
-
-  export TPM2TOOLS_TCTI="$(detect_tcti)"
-  log "TCTI: $TPM2TOOLS_TCTI"
-
-  # Sanity check the TPM
-  tpm2_getcap properties-fixed > "$OUT_DIR/tpm_properties.json" 2>/dev/null || \
-    die "Cannot talk to TPM via $TPM2TOOLS_TCTI"
-
-  AK_REF="$(pick_ak_ref)"
-  log "Using AK: $AK_REF"
-
-  # Nonce (anti-replay)
-  if ! tpm2_getrandom "$NONCE_BYTES" > "$OUT_DIR/nonce.bin" 2>/dev/null; then
-    log "tpm2_getrandom failed; falling back to /dev/urandom"
-    dd if=/dev/urandom of="$OUT_DIR/nonce.bin" bs="$NONCE_BYTES" count=1 status=none
-  fi
-
-  # Produce quote
-  tpm2_quote -Q \
-    -c "$AK_REF" \
-    -l "$PCR_LIST" \
-    -q "$OUT_DIR/nonce.bin" \
-    -m "$OUT_DIR/attest.msg" \
-    -s "$OUT_DIR/attest.sig" \
-    -o "$OUT_DIR/attest.quote" \
-    --validation "$OUT_DIR/attest.validation" >/dev/null
-
-  # PCR snapshot
-  tpm2_pcrread "$PCR_LIST" > "$OUT_DIR/pcrs.json"
-
-  # For verifier convenience include AK public (from ctx or handle)
-  tpm2_readpublic -c "$AK_REF" > "$OUT_DIR/ak_readpublic.json"
-
-  # Bundle
-  {
-    printf '{\n'
-    printf '  "tcti": %s,\n'           "$(printf '%s' "$TPM2TOOLS_TCTI" | jq -R '.')"
-    printf '  "ak_ref": %s,\n'          "$(printf '%s' "$AK_REF" | jq -R '.')"
-    printf '  "pcr_list": %s,\n'         "$(printf '%s' "$PCR_LIST" | jq -R '.')"
-    printf '  "nonce_b64": %s,\n'        "$(base64 -w0 < "$OUT_DIR/nonce.bin" | jq -R '.')"
-    printf '  "ak_public": %s,\n'        "$(jq -c . < "$OUT_DIR/ak_readpublic.json")"
-    printf '  "pcrs": %s,\n'             "$(jq -c . < "$OUT_DIR/pcrs.json")"
-    printf '  "attest_msg_b64": %s,\n'   "$(base64 -w0 < "$OUT_DIR/attest.msg" | jq -R '.')"
-    printf '  "attest_sig_b64": %s,\n'   "$(base64 -w0 < "$OUT_DIR/attest.sig" | jq -R '.')"
-    printf '  "attest_quote_b64": %s\n'  "$(base64 -w0 < "$OUT_DIR/attest.quote" | jq -R '.')"
-    printf '}\n'
-  } > "$OUT_DIR/quote_bundle.json"
-
-  log "Quote OK → $OUT_DIR/quote_bundle.json"
-}
-
-main "$@"
-
+echo "Quote generated under: $OUT_DIR"
+echo "Nonce: $NONCE_HEX"
