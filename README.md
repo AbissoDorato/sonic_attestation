@@ -53,7 +53,7 @@ build-essential gcc libssl-dev libjson-c-dev
 swtpm tpm2-tools docker.io openssl jq
 ```
 
-### Installation Steps
+### Installation Steps (Inside Sonic)
 
 1. **Download and extract the attestation system:**
 ```bash
@@ -460,19 +460,11 @@ systemctl status sonic-attestation
 journalctl -u sonic-attestation
 ```
 
-### Docker Integration
-
-- Monitors SONiC container states
-- Measures container images and configurations
-- Tracks Redis database state
-
 ### Configuration Integration
 
 - Reads SONiC configuration files
 - Monitors configuration changes
 - Integrates with FRR routing
-
-## Future Enhancements
 
 ### Planned Features
 
@@ -491,17 +483,8 @@ journalctl -u sonic-attestation
    - gRPC attestation services
    - Integration with network controllers
 
-4. **Advanced Policies**
-   - Fine-grained trust policies
-   - Risk-based decisions
-   - Machine learning for anomaly detection
 
 ## Support
-
-### Documentation
-- Man pages: `man sonic_measure`
-- Built-in help: `sonic_measure --help`
-- Configuration examples in `/etc/sonic/attestation/`
 
 ### Logging
 - Main log: `/var/log/sonic/attestation.log`
@@ -513,8 +496,4 @@ journalctl -u sonic-attestation
 - Contribute improvements via pull requests
 - Share reference values and configurations
 
-## Conclusion
 
-The SONiC Attestation System provides a robust foundation for network path attestation in SONiC environments. By combining software TPM technology with comprehensive system measurement, it enables verification of network device trustworthiness and supports secure network path establishment.
-
-For production deployments, consider upgrading to hardware TPM and implementing continuous monitoring for enhanced security posture.
