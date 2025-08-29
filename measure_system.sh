@@ -3,7 +3,11 @@
 # - Shell-safe: uses bash; avoids [[ ... ]] in case /bin/sh invokes it
 # - TCTI auto-detection: prefers device:/dev/tpmrm0
 # - Writes canonical artifacts under /var/lib/sonic/measurements
-# - Extends PCR 9 (sha256) for each item
+
+# application pcrr 16-23
+# sonic config 17
+# sonic routing 18
+# sonic hw info 19
 
 set -euo pipefail
 
@@ -24,13 +28,16 @@ detect_tcti() {
   echo ""
 }
 
-extend_pcr9() {
+# function to extend pcrs 
+
+extend_pcr() {
   # $1: path to a file to hash and extend
   local file="$1"
+  local pcr="$2"
   local sum
   sum="$(sha256sum "$file" | awk '{print $1}')"
   # Extend as sha256:HASH
-  tpm2_pcrextend 9:sha256="$sum" >/dev/null
+  tpm2_pcrextend "$2":sha256="$sum" >/dev/null
   printf "%s  %s\n" "$sum" "$file" >> "${WORKDIR}/measurements.txt"
 }
 
@@ -58,19 +65,19 @@ main() {
   # 1) config_db.json
   if [ -f /etc/sonic/config_db.json ]; then
     cp /etc/sonic/config_db.json "${WORKDIR}/config_db.json"
-    extend_pcr9 "${WORKDIR}/config_db.json"
+    extend_pcr "${WORKDIR}/config_db.json" "9"
   else
     log "WARN: /etc/sonic/config_db.json not found"
   fi
 
   # 2) Kernel info
   uname -a > "${WORKDIR}/kernel.txt"
-  extend_pcr9 "${WORKDIR}/kernel.txt"
+  extend_pcr "${WORKDIR}/kernel.txt" "9"
 
   # 3) BIOS/DMI (if available)
   if command -v dmidecode >/dev/null 2>&1; then
     dmidecode -t bios > "${WORKDIR}/bios.txt" || true
-    extend_pcr9 "${WORKDIR}/bios.txt" || true
+    extend_pcr "${WORKDIR}/bios.txt" "9"|| true
   fi
 
   # 4) Routing tables
@@ -79,7 +86,7 @@ main() {
       ip -d route show table main || true
       ip -d rule show || true
     } > "${WORKDIR}/routes.txt"
-    extend_pcr9 "${WORKDIR}/routes.txt"
+    extend_pcr "${WORKDIR}/routes.txt" "9"
   fi
 
   # 5) Interfaces + driver info
@@ -87,7 +94,7 @@ main() {
     ip -br link show || true
     ip addr show || true
   } > "${WORKDIR}/ifaces.txt"
-  extend_pcr9 "${WORKDIR}/ifaces.txt"
+  extend_pcr "${WORKDIR}/ifaces.txt" "9"
 
   # Per-interface driver (best-effort)
   if command -v ethtool >/dev/null 2>&1; then
@@ -95,25 +102,35 @@ main() {
     for i in $(ls /sys/class/net 2>/dev/null || true); do
       ethtool -i "$i" 2>/dev/null || true
     done >> "${WORKDIR}/drivers.txt"
-    extend_pcr9 "${WORKDIR}/drivers.txt"
+    extend_pcr "${WORKDIR}/drivers.txt" "9"
   fi
 
   # 6) Loaded modules
   if command -v lsmod >/dev/null 2>&1; then
     lsmod > "${WORKDIR}/modules.txt"
-    extend_pcr9 "${WORKDIR}/modules.txt"
+    extend_pcr "${WORKDIR}/modules.txt" "9"
   fi
 
   # 7) FRR running config (if readable)
   if [ -r /etc/sonic/frr/frr.conf ]; then
     cp /etc/sonic/frr/frr.conf "${WORKDIR}/frr.conf"
-    extend_pcr9 "${WORKDIR}/frr.conf"
+    extend_pcr "${WORKDIR}/frr.conf" "9"
   fi
 
   # 8) Anything else you want “in policy” — add here.
 
   log "Final PCR 9 value:"
   tpm2_pcrread sha256:9 | sed 's/^/  /'
+
+  log "Final PCR 17 value:"
+  tpm2_pcrread sha256:17 | sed 's/^/  /'
+
+  log "Final PCR 18 value:"
+  tpm2_pcrread sha256:18 | sed 's/^/  /'
+
+  log "Final PCR 19 value:"
+  tpm2_pcrread sha256:19 | sed 's/^/  /'
+
 
   log "System measurements completed successfully"
   log "Measurements saved to: ${WORKDIR}/measurements.txt"

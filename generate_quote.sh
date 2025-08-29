@@ -4,6 +4,7 @@ set -euo pipefail
 # --- config / defaults ---
 : "${CONF:=/etc/sonic/attestation/attestation.conf}"
 : "${STATE_DIR:=/var/lib/sonic/attestation}"
+// should be the pcr we decide to quote based on the things we want to measure 
 : "${PCR_NUMBER:=9}"
 : "${HALG:=sha256}"
 : "${AK_CTX:=${STATE_DIR}/ak.ctx}"
@@ -42,31 +43,6 @@ command -v tpm2_pcrread >/dev/null
 
 SEL="${HALG}:${PCR_NUMBER}"
 
-# ---- Evidence binding (qualifying data) ----
-# Choose which files define your "measurement bundle" (stable, canonicalized)
-# Example: measurements.json + normalized routing dump + bios/kver summaries
-BUNDLE_FILES=()
-[ -f "${OUT_DIR}/measurements.json" ] && BUNDLE_FILES+=("${OUT_DIR}/measurements.json")
-[ -f "${OUT_DIR}/routing.txt" ]       && BUNDLE_FILES+=("${OUT_DIR}/routing.txt")
-[ -f "${OUT_DIR}/kernel.txt" ]        && BUNDLE_FILES+=("${OUT_DIR}/kernel.txt")
-[ -f "${OUT_DIR}/bios.txt" ]          && BUNDLE_FILES+=("${OUT_DIR}/bios.txt")
-
-# Create a reproducible manifest (name + sha256) and a single bundle hash
-MANIFEST="${OUT_DIR}/evidence_manifest.txt"
-> "$MANIFEST"
-for f in "${BUNDLE_FILES[@]}"; do
-  # hash only content; include stable file names to avoid reordering ambiguity
-  printf "%s  %s\n" "$(sha256sum "$f" | awk '{print tolower($1)}')" "$(basename "$f")" >> "$MANIFEST"
-done
-BUNDLE_HASH="$(sha256sum "$MANIFEST" | awk '{print tolower($1)}')"
-
-# Mix in your random nonce to prevent replay; store both for the verifier
-echo -n "$NONCE_HEX" > "${OUT_DIR}/nonce.txt"
-printf "%s:%s" "$NONCE_HEX" "$BUNDLE_HASH" > "${OUT_DIR}/qual.bin"
-
-
-
-
 # ---- Dump PCRs (portable) ----
 if has_opt_pcrread_L; then
   # Newer tools: tpm2_pcrread -L sha256:9
@@ -76,6 +52,7 @@ else
   tpm2_pcrread "$SEL" > "$PCRS_YAML"
 fi
 
+# ---- Quote (no --validation flag!) ----
 if tpm2_quote -h 2>&1 | grep -q " -o,"; then
   tpm2_quote \
     -c "$AK_CTX" \
