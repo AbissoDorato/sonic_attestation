@@ -118,7 +118,7 @@ main() {
   # BIOS/DMI
   if command -v dmidecode >/dev/null 2>&1; then
     dmidecode -t bios > "${WORKDIR}/bios.txt" || true
-    [ -s "${WORKDIR}/bios.txt" ] && extend_pcr "${WORKDIR}/bios.txt" "19" || true
+    [ -s "${WORKDIR}/bios.txt" ] && extend_pcr "${WORKDIR}/bios.txt" "23" || true
   fi
 
   # Interfaces + addressing

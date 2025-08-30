@@ -1,0 +1,62 @@
+# --- OS / editor ---
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Build artifacts ---
+*.o
+*.so
+*.a
+*.out
+*.bin
+*.exe
+*.log
+*.tmp
+*.conf
+
+# --- Make / GCC outputs ---
+/build/
+/dist/
+/obj/
+/*.dSYM/
+/*.gcno
+/*.gcda
+
+# --- TPM state (swtpm, tpm2-tools) ---
+/tmp/mytpm*
+/var/lib/sonic/attestation/tpm/
+/var/lib/swtpm/
+/run/swtpm/
+/etc/sonic/attestation/ak.ctx
+/etc/sonic/attestation/ak.pub
+/etc/sonic/attestation/ak.crt
+
+# --- Attestation measurements ---
+/var/lib/sonic/attestation/measurements/
+/var/lib/sonic/attestation/reference_values.db
+/var/lib/sonic/attestation/reference_values.conf
+/var/log/sonic/attestation.log
+
+# --- Generated quotes & signatures ---
+quote_*/
+/*.sig
+/*.crt
+/*.pem
+/*.json
+
+# --- Docker / systemd ---
+/*.pid
+/*.sock
+*.pid
+*.sock
+
+# --- Testing ---
+/test-results/
+/coverage/
+/debug.log
+/perf.log
+
