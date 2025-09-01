@@ -48,6 +48,8 @@ check_dependencies() {
         "libjson-c-dev"
         "swtpm"
         "tpm2-tools"
+        "tpm2-abrmd"
+        "libtss2-dev"
         "openssl"
         "jq"
     )
@@ -162,7 +164,7 @@ TPM_SOCKET_PATH="/var/lib/sonic/attestation/tpm/swtpm-sock"
 
 # Measurement Configuration
 MEASUREMENTS_DIR="/var/lib/sonic/attestation/measurements"
-PCR_NUMBER="9"
+PCR_NUMBER="13,14,15"
 HASH_ALGORITHM="sha256"
 
 # Network Configuration
