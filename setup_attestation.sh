@@ -95,7 +95,7 @@ provision_ek_ak() {
 quote_and_verify() {
   local ts outdir
   ts="$(date +%Y%m%d_%H%M%S)"
-  outdir="${WORKDIR}/quotes/${ts}"
+  outdir="${WORKDIR}/quotes/${ts}_CREATION"
   mkdir -p "$outdir"
 
   # Fresh nonce (hex)

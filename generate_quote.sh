@@ -2,207 +2,135 @@
 set -euo pipefail
 
 # ============================================================
-# SONiC Attestation - Quote & PCR Extend Helper
-# - Quote PCRs and save artifacts (msg/sig/ticket/pcrs/meta)
-# - Extend PCRs with file digests (single file) or a stable
-#   bundle-root digest (recommended) before quoting
+# SONiC Attestation: Quote Generator
+# - Creates a fresh nonce
+# - Produces a TPM2 quote over selected PCRs
+# - Saves artifacts into a timestamped directory
+#
+# Requires: tpm2-tools, openssl
 #
 # Usage:
-#   ./generate_quote.sh quote [NONCE_HEX] [OUT_DIR]
-#   ./generate_quote.sh extend-file  <PCR> <FILE>
-#   ./generate_quote.sh extend-bundle <PCR> <FILE...>
-#   ./generate_quote.sh help
-#
-# Notes:
-# - Requires: tpm2-tools, openssl, coreutils
-# - AK context/public must already exist (generated elsewhere)
+#   ./generate_quote.sh [OUT_DIR_BASE]
+#     OUT_DIR_BASE (optional) defaults to /var/lib/sonic/attestation/quotes
 # ============================================================
+
+log() { printf "[%(%F %T)T] %s\n" -1 "$*"; }
 
 # ---------------- Config / Defaults ----------------
 : "${CONF:=/etc/sonic/attestation/attestation.conf}"
 : "${STATE_DIR:=/var/lib/sonic/attestation}"
-# Default PCR selection for QUOTE (edit as you prefer)
-: "${PCR_NUMBER:=14,15,23}"
-: "${HALG:=sha256}"
+: "${OUT_BASE:=${1:-${STATE_DIR}/quotes}}"
+
+# PCR bank + selection (example: "sha256:13,14,15")
+: "${PCRS_SPEC:=sha256:13,14,15}"
+# Hash/signature algorithm for the quote (should match the PCR bank)
+: "${HASH_ALG:=sha256}"
+
+# Attestation Key locations (choose one of these approaches):
+# - AK by persistent handle (fast path on devices with provisioned AK)
+: "${AK_HANDLE:=0x81010002}"
+# - AK context file (if you load it dynamically elsewhere)
 : "${AK_CTX:=${STATE_DIR}/ak.ctx}"
+# AK public key file (needed later for verification)
 : "${AK_PUB:=${STATE_DIR}/ak.pub}"
 
-[ -f "$CONF" ] && source "$CONF"
+# Load optional overrides
+[ -f "$CONF" ] && source "$CONF" || true
 
-# ---------------- Logging helpers ------------------
-log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
-die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-
-# ---------------- TPM detection --------------------
+# ---------------- TPM Access Detection ----------------
 detect_tcti() {
-  # Prefer kernel resource manager if present
   if [ -e /dev/tpmrm0 ]; then echo "device:/dev/tpmrm0"; return; fi
   if [ -e /dev/tpm0   ]; then echo "device:/dev/tpm0";   return; fi
-  # Common swtpm socket path used in our SONiC service
+  # Allow a software TPM socket if explicitly present
   local sock="/run/swtpm/sonic/swtpm-sock"
   if [ -S "$sock" ] && [ -S "${sock}.ctrl" ]; then echo "swtpm:path=${sock}"; return; fi
-  # Fallback: if env is already set, keep it
-  if [ -n "${TPM2TOOLS_TCTI:-}" ]; then echo "$TPM2TOOLS_TCTI"; return; fi
   echo ""
 }
 
-TCTI="$(detect_tcti)"
-[ -n "$TCTI" ] || die "No TPM TCTI found (no /dev/tpmrm0, /dev/tpm0 or swtpm socket)."
+# ---------------- Pre-flight Checks ----------------
+command -v tpm2_quote >/dev/null 2>&1 || { echo "Missing tpm2-tools"; exit 1; }
+command -v tpm2_pcrread >/dev/null 2>&1 || { echo "Missing tpm2-tools"; exit 1; }
+command -v tpm2_readpublic >/dev/null 2>&1 || true
+command -v openssl >/dev/null 2>&1 || { echo "Missing openssl"; exit 1; }
+
+TCTI="$(detect_tcti)"; [ -n "$TCTI" ] || { echo "No TPM available"; exit 1; }
 export TPM2TOOLS_TCTI="$TCTI"
-log "Using TCTI: $TPM2TOOLS_TCTI"
 
-# ---------------- Tool availability ----------------
-command -v tpm2_quote >/dev/null 2>&1 || die "tpm2_quote not found"
-command -v tpm2_pcrread >/dev/null 2>&1 || die "tpm2_pcrread not found"
-command -v tpm2_pcrextend >/dev/null 2>&1 || die "tpm2_pcrextend not found"
-command -v openssl >/dev/null 2>&1 || die "openssl not found"
-
-[ -f "$AK_CTX" ] || die "AK context not found at $AK_CTX"
-[ -f "$AK_PUB" ] || die "AK public not found at $AK_PUB"
-
-# ---------------- Compatibility helpers ------------
-has_opt_quote()      { tpm2_quote  -h 2>&1 | grep -q -- "$1"; }
-has_opt_pcrread_L()  { tpm2_pcrread -h 2>&1 | grep -q " -L,"; }
-
-# tpm2_quote changed -l/-L across versions; detect
-QUOTE_PCR_OPT="-L"; has_opt_quote " -L," || QUOTE_PCR_OPT="-l"
-
-# ---------------- PCR extend helpers ----------------
-# Extend a single file's sha256 into PCR
-extend_pcr_file() {
-  local pcr="$1"; shift
-  local file="$1"
-  [ -r "$file" ] || die "File not readable: $file"
-  local sum
-  sum="$(sha256sum "$file" | awk '{print $1}')"
-  log "Extending PCR${pcr} with sha256($file)=${sum}"
-  tpm2_pcrextend "${pcr}:sha256=${sum}" >/dev/null
-  printf "%s  %s\n" "$sum" "$file"
+# Ensure AK public is present (if not, try to dump from handle/context)
+ensure_ak_pub() {
+  if [ -s "$AK_PUB" ]; then return; fi
+  mkdir -p "$(dirname "$AK_PUB")"
+  if [ -n "${AK_CTX:-}" ] && [ -f "$AK_CTX" ]; then
+    log "AK public not found, exporting from AK context: $AK_CTX"
+    tpm2_readpublic -c "$AK_CTX" -o "$AK_PUB" >/dev/null
+  else
+    log "AK public not found, exporting from AK handle: $AK_HANDLE"
+    tpm2_readpublic -c "$AK_HANDLE" -o "$AK_PUB" >/dev/null
+  fi
+  [ -s "$AK_PUB" ] || { echo "Failed to obtain AK public key"; exit 1; }
 }
 
-# Extend a stable bundle-root digest into PCR
-# This is recommended for "classes" of measurement (config, routing, hw)
-extend_pcr_bundle() {
-  local pcr="$1"; shift
-  [ "$#" -gt 0 ] || die "extend-bundle: no input files"
-  local tmp
-  tmp="$(mktemp)"
-  # Deterministic manifest lines: mode size sha256 path
-  for f in "$@"; do
-    [ -e "$f" ] || { log "Skip missing: $f"; continue; }
-    local sum size mode
-    sum="$(sha256sum "$f" | awk '{print $1}')"
-    size="$(stat -c '%s' "$f")"
-    mode="$(stat -c '%f' "$f")"
-    printf '%s %s %s %s\n' "$mode" "$size" "$sum" "$f" >> "$tmp"
-  done
-  sort -u "$tmp" -o "$tmp"
-  local root
-  root="$(sha256sum "$tmp" | awk '{print $1}')"
-  log "Extending PCR${pcr} with bundle-root=${root} (n=$(wc -l < "$tmp"))"
-  tpm2_pcrextend "${pcr}:sha256=${root}" >/dev/null
-  echo "bundle-root ${root}"
-  rm -f "$tmp"
-}
+main() {
+  mkdir -p "$OUT_BASE"
 
-# ---------------- Quote action ---------------------
-do_quote() {
-  local NONCE_HEX="${1:-$(openssl rand -hex 20)}"
-  local OUT_DIR="${2:-${STATE_DIR}/measurements/quote_$(date +%Y%m%d_%H%M%S)}"
-  mkdir -p "$OUT_DIR"
+  local ts outdir
+  ts="$(date +%Y%m%d_%H%M%S)"
+  outdir="${OUT_BASE}/${ts}_QUOTE"
+  mkdir -p "$outdir"
 
-  local QUOTE_MSG="${OUT_DIR}/quote.msg"
-  local QUOTE_SIG="${OUT_DIR}/quote.sig"
-  local QUOTE_TK="${OUT_DIR}/quote.tk"
-  local PCRS_YAML="${OUT_DIR}/pcrs.yaml"
-  local META_JSON="${OUT_DIR}/quote_meta.json"
-  local NONCE_TXT="${OUT_DIR}/nonce_hex.txt"
+  # Fresh nonce (hex)
+  local NONCE_HEX
+  NONCE_HEX="$(openssl rand -hex 20)"
+  printf "%s" "$NONCE_HEX" > "${outdir}/nonce.hex"
 
-  local SEL="${HALG}:${PCR_NUMBER}"
-  echo -n "$NONCE_HEX" > "$NONCE_TXT"
+  ensure_ak_pub
 
-  log "Dumping PCRs: $SEL"
-  if has_opt_pcrread_L; then
-    # Newer tools
-    tpm2_pcrread -L "$SEL" > "$PCRS_YAML"
+  log "Generating quote over PCRs (${PCRS_SPEC})"
+  # Choose which AK to use for -c: handle or context
+  local ak_ref
+  if [ -n "${AK_CTX:-}" ] && [ -f "$AK_CTX" ]; then
+    ak_ref="$AK_CTX"
   else
-    # Older tools
-    tpm2_pcrread "$SEL" > "$PCRS_YAML"
+    ak_ref="$AK_HANDLE"
   fi
 
-  log "Quoting with AK '$AK_CTX' over $SEL"
-  if tpm2_quote -h 2>&1 | grep -q " -t,"; then
-    # Ticket supported
-    tpm2_quote \
-      -c "$AK_CTX" \
-      "${QUOTE_PCR_OPT}" "$SEL" \
-      -g "$HALG" \
-      -q "$NONCE_HEX" \
-      -m "$QUOTE_MSG" \
-      -s "$QUOTE_SIG" \
-      -t "$QUOTE_TK"
-  else
-    # No ticket flag; still fine
-    tpm2_quote \
-      -c "$AK_CTX" \
-      "${QUOTE_PCR_OPT}" "$SEL" \
-      -g "$HALG" \
-      -q "$NONCE_HEX" \
-      -m "$QUOTE_MSG" \
-      -s "$QUOTE_SIG"
-    : > "$QUOTE_TK"
-  fi
+  # Produce the quote
+  tpm2_quote \
+    -c "$ak_ref" \
+    -l "$PCRS_SPEC" \
+    -g "$HASH_ALG" \
+    -q "$NONCE_HEX" \
+    -m "${outdir}/quote.attest" \
+    -s "${outdir}/quote.sig" \
+    -o "${outdir}/pcrs.bin"
 
-  # Metadata for the verifier
-  cat > "$META_JSON" <<EOF
+  # Also dump human-readable PCR values for inspection
+  # NOTE: tpm2_pcrread takes the bank+list directly, no "-l" flag.
+  tpm2_pcrread "$PCRS_SPEC" > "${outdir}/pcrread.txt"
+
+  # Minimal metadata for bookkeeping
+  cat > "${outdir}/quote_meta.json" <<EOF
 {
-  "timestamp": "$(date -Is)",
-  "ak_pub": "${AK_PUB}",
-  "ak_ctx": "${AK_CTX}",
-  "tcti": "${TPM2TOOLS_TCTI}",
-  "pcr_selection": "${SEL}",
-  "nonce_hex": "${NONCE_HEX}",
-  "quote_msg": "$(basename "$QUOTE_MSG")",
-  "quote_sig": "$(basename "$QUOTE_SIG")",
-  "quote_ticket": "$(basename "$QUOTE_TK")",
-  "pcrs_yaml": "$(basename "$PCRS_YAML")",
-  "hash_alg": "${HALG}"
+  "timestamp": "${ts}",
+  "pcrs_spec": "${PCRS_SPEC}",
+  "hash_alg": "${HASH_ALG}",
+  "nonce_hex_file": "nonce.hex",
+  "attest_file": "quote.attest",
+  "sig_file": "quote.sig",
+  "pcrs_map_file": "pcrs.bin",
+  "pcrread_text": "pcrread.txt",
+  "ak_pub_file": "$(realpath -m "$AK_PUB" 2>/dev/null || echo "$AK_PUB")"
 }
 EOF
 
-  log "Quote saved under: $OUT_DIR"
-  echo "Artifacts:"
-  printf '  - %s\n' "$PCRS_YAML" "$QUOTE_MSG" "$QUOTE_SIG" "$QUOTE_TK" "$META_JSON" "$NONCE_TXT"
-  echo
-  echo "Quick verify (local, signature only):"
-  echo "  tpm2_verifysignature -c \"$AK_PUB\" -g ${HALG} -m \"$QUOTE_MSG\" -s \"$QUOTE_SIG\""
+  log "Quote generated."
+  echo "Artifacts in: $outdir"
+  printf "  %s\n" "${outdir}/nonce.hex" \
+                 "${outdir}/quote.attest" \
+                 "${outdir}/quote.sig" \
+                 "${outdir}/pcrs.bin" \
+                 "${outdir}/pcrread.txt" \
+                 "${outdir}/quote_meta.json"
 }
 
-# ---------------- Usage ----------------------------
-usage() {
-  cat <<EOF
-Usage:
-  $0 quote [NONCE_HEX] [OUT_DIR]
-      Quote PCRs ${PCR_NUMBER} (alg ${HALG}) and save artifacts.
-
-  $0 extend-file <PCR> <FILE>
-      Hash <FILE> with sha256 and extend PCR <PCR> once.
-
-  $0 extend-bundle <PCR> <FILE...>
-      Build a deterministic manifest over <FILE...>, hash it, and extend PCR <PCR> with the bundle-root.
-      Recommended for stability (config/routing/hw classes).
-
-  $0 help
-EOF
-}
-
-# ---------------- Dispatcher -----------------------
-cmd="${1:-quote}"; shift || true
-case "$cmd" in
-  quote)          do_quote "${1:-}" "${2:-}";;
-  extend-file)    [ "$#" -ge 2 ] || die "extend-file requires <PCR> <FILE>"; extend_pcr_file "$1" "$2";;
-  extend-bundle)  [ "$#" -ge 2 ] || die "extend-bundle requires <PCR> <FILE...>"; pcr="$1"; shift; extend_pcr_bundle "$pcr" "$@";;
-  help|-h|--help) usage;;
-  *)              usage; die "Unknown command: $cmd";;
-esac
-exit 0
+main "$@"
