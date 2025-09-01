@@ -4,10 +4,12 @@
 # - TCTI auto-detection: prefers device:/dev/tpmrm0
 # - Canonical artifacts under /var/lib/sonic/measurements
 # PCR mapping:
-#   - SONiC config            -> PCR 15
-#   - Routing state (RIB/FIB) -> PCR 23
-#   - HW & SW baseline        -> PCR 16
-#   - (Optional app-specific) -> PCRs 16 or 20–23 (reserve for future)
+#   Considering that 
+#   from 8 to 15 can be used 
+#   the thing that we have to measure are
+#   routing state, sonic config, hw/sw baseline
+#   we can use 13 (routing) 14 (sonic config) 15 (hw/sw baseline)
+#   - (Optional app-specific) -> 
 
 set -euo pipefail
 
@@ -62,30 +64,7 @@ main() {
   : > "${WORKDIR}/measurements.txt"
 
   ############################
-  # PCR 17 - SONiC CONFIG
-  ############################
-  if [ -f /etc/sonic/config_db.json ]; then
-    cp /etc/sonic/config_db.json "${WORKDIR}/config_db.json"
-    extend_pcr "${WORKDIR}/config_db.json" "15"
-  else
-    log "WARN: /etc/sonic/config_db.json not found"
-  fi
-
-  # FRR running config (best effort)
-  # Prefer running-config via vtysh; fallback to static file if readable.
-  if command -v vtysh >/dev/null 2>&1; then
-    vtysh -c 'show running-config' > "${WORKDIR}/frr_running.conf" 2>/dev/null || true
-    if [ -s "${WORKDIR}/frr_running.conf" ]; then
-      extend_pcr "${WORKDIR}/frr_running.conf" "23"
-    fi
-  fi
-  if [ -r /etc/sonic/frr/frr.conf ]; then
-    cp /etc/sonic/frr/frr.conf "${WORKDIR}/frr.conf"
-    extend_pcr "${WORKDIR}/frr.conf" "23"
-  fi
-
-  ############################
-  # PCR 18 - ROUTING STATE
+  # PCR 13 - ROUTING STATE
   ############################
   if command -v ip >/dev/null 2>&1; then
     {
@@ -104,29 +83,44 @@ main() {
         vtysh -c 'show bgp l2vpn evpn route'     2>/dev/null || true
       fi
     } > "${WORKDIR}/routes.txt"
-    extend_pcr "${WORKDIR}/routes.txt" "16"
+    extend_pcr "${WORKDIR}/routes.txt" "13"
   fi
 
   ############################
-  # PCR 19 - HW & SW BASELINE
+  # PCR 14 - SONiC CONFIG
   ############################
-
-  # Kernel info
-  uname -a > "${WORKDIR}/kernel.txt"
-  extend_pcr "${WORKDIR}/kernel.txt" "23"
-
-  # BIOS/DMI
-  if command -v dmidecode >/dev/null 2>&1; then
-    dmidecode -t bios > "${WORKDIR}/bios.txt" || true
-    [ -s "${WORKDIR}/bios.txt" ] && extend_pcr "${WORKDIR}/bios.txt" "23" || true
+  if [ -f /etc/sonic/config_db.json ]; then
+    cp /etc/sonic/config_db.json "${WORKDIR}/config_db.json"
+    extend_pcr "${WORKDIR}/config_db.json" "14"
+  else
+    log "WARN: /etc/sonic/config_db.json not found"
   fi
+
+  # FRR running config (best effort)
+  # Prefer running-config via vtysh; fallback to static file if readable.
+  if command -v vtysh >/dev/null 2>&1; then
+    vtysh -c 'show running-config' > "${WORKDIR}/frr_running.conf" 2>/dev/null || true
+    if [ -s "${WORKDIR}/frr_running.conf" ]; then
+      extend_pcr "${WORKDIR}/frr_running.conf" "14"
+    fi
+  fi
+  if [ -r /etc/sonic/frr/frr.conf ]; then
+    cp /etc/sonic/frr/frr.conf "${WORKDIR}/frr.conf"
+    extend_pcr "${WORKDIR}/frr.conf" "14"
+  fi
+
+  
+
+  ############################
+  # PCR 15 - HW & SW BASELINE
+  ############################
 
   # Interfaces + addressing
   {
     ip -br link show || true
     ip addr show     || true
   } > "${WORKDIR}/ifaces.txt"
-  extend_pcr "${WORKDIR}/ifaces.txt" "23"
+  extend_pcr "${WORKDIR}/ifaces.txt" "15"
 
   # Per-interface driver info
   if command -v ethtool >/dev/null 2>&1; then
@@ -146,12 +140,12 @@ main() {
   ############################
   # Final PCR reads
   ############################
-  log "Final PCR 15 (SONiC config):"
+  log "Final PCR 13 (SONiC config):"
+  tpm2_pcrread sha256:13 | sed 's/^/ /'
+  log "Final PCR 14 (Routing state):"
+  tpm2_pcrread sha256:14 | sed 's/^/ /'
+  log "Final PCR 15 (HW & SW base):"
   tpm2_pcrread sha256:15 | sed 's/^/ /'
-  log "Final PCR 16 (Routing state):"
-  tpm2_pcrread sha256:16 | sed 's/^/ /'
-  log "Final PCR 23 (HW & SW base):"
-  tpm2_pcrread sha256:23 | sed 's/^/ /'
 
   log "System measurements completed successfully."
   log "Measurements saved to: ${WORKDIR}/measurements.txt"

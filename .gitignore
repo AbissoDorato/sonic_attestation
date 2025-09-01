@@ -59,4 +59,4 @@ quote_*/
 /coverage/
 /debug.log
 /perf.log
-
+/debug_tpm.sh
