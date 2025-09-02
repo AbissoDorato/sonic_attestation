@@ -57,14 +57,20 @@ NONCE_HEX="$(tr -d '\n\r ' < "$NONCE_HEX_FILE")"
 OUT="${QUOTE_DIR}/verification.txt"
 
 log "Verifying quote signature…"
-tpm2_checkquote \
+if tpm2_checkquote \
   -u "$AK_PUB" \
   -g "$HASH_ALG" \
   -m "$ATTEST" \
   -s "$SIG" \
   -f "$PCRMAP" \
   -q "$NONCE_HEX" \
-  > "$OUT"
+  > "$OUT"; then
+    log "Quote verification: SUCCESS"
+else
+    log "Quote verification: FAILED"
+    echo "Verification failed. See $OUT for details."
+    exit 1
+fi
 
 log "Verification complete."
 echo "Result saved to: $OUT"
