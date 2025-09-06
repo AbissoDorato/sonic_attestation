@@ -80,13 +80,7 @@ main() {
 
   # Fresh nonce (hex)
   local NONCE_HEX
-  if [ $# -ge 2 ] && [ -n "$2" ]; then
-    NONCE_HEX="$2"
-    log "Using provided nonce: $NONCE_HEX"
-  else
-    NONCE_HEX="$(openssl rand -hex 20)"
-    log "Generated random nonce: $NONCE_HEX"
-  fi
+  NONCE_HEX="$(openssl rand -hex 20)"
   printf "%s" "$NONCE_HEX" > "${outdir}/nonce.hex"
 
   ensure_ak_pub
