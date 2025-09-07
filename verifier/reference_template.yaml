@@ -1,0 +1,18 @@
+# This is a template configuration file for the verifier.
+# Copy this file to reference.yaml and edit it to match your environment.
+nodes:
+  switch01:
+    endpoint: "127.0.0.1"
+    transport: "ssh"
+    ak_pub_sha256: "PK_HASH"
+    policy: "baseline-v1"
+
+policies:
+  baseline-v1:
+    pcrs:
+      sha256:
+        "13": ["0000000000000000000000000000000000000000000000000000000000000000"]
+        "14": ["0000000000000000000000000000000000000000000000000000000000000000"]
+        "15": ["0000000000000000000000000000000000000000000000000000000000000000"]
+    measurements:
+      CONFIG_DB_SHA256: "CONFIG_DB_HASH"
