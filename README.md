@@ -25,7 +25,7 @@ The SONiC Attestation System provides network path attestation capabilities for 
 ### Key Features
 
 - **Software TPM Integration**: Uses swtpm for TPM 2.0 emulation
-- **Comprehensive Measurement**: Covers firmware, kernel, SONiC config, routing tables, and services
+- **Comprehensive Measurement**: Covers firmware, kernel, SONiC config and routing tables
 - **High-Performance C Collector**: Optional C-based measurement tool for better performance
 - **Network Trust Management**: Manages trusted topology and path attestation
 - **Reference Value Database**: Maintains known-good measurements for verification
@@ -142,6 +142,7 @@ sudo generate_quote.sh "deadbeef1234567890abcdef"
 ```
 
 #### 4. Verify Attestation
+
 ```bash
 # Initialize reference database
 sudo verify_attestation.sh init
@@ -217,6 +218,17 @@ sonic_attestation_status.sh
 ```bash
 tail -f /var/log/sonic/attestation.log
 journalctl -u sonic-attestation -f
+```
+
+### Attestation agent
+0. Modify the reference.yaml file and add the correct reference values and expected nodes 
+1. Run the attester agent inside SoNIC (use tpm_start.txt)
+```bash
+sudo python3 attester agent
+```
+2. On the host run the verifier with the correct parameters
+```bash
+sudo python3 verifier.py verify   --node name-node   --reference-yaml reference.yaml   --pcrs your-pcrs   --ak-pub-path /path/to/pk
 ```
 
 ## API Reference
@@ -313,13 +325,7 @@ Commands:
    - FRR running config
    - BGP state
 
-5. **Services and Containers**
-   - Running Docker containers
-   - Container images
-   - Redis database state
-   - SystemD services
-
-6. **Hardware**
+5. **Hardware**
    - CPU information
    - Memory configuration
    - PCI devices
@@ -329,7 +335,7 @@ Commands:
 
 ### TPM Security
 
-- Uses software TPM (swtpm) for MVP
+- Uses software TPM (swtpm)
 - Production deployment should use hardware TPM
 - TPM state directory has restricted permissions (700)
 - Attestation keys are protected by TPM
