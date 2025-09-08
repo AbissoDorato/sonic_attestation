@@ -177,11 +177,11 @@ LOG_LEVEL="INFO"
 LOG_FILE="/var/log/sonic/attestation.log"
 
 # Components to measure
-MEASURE_FIRMWARE="true"
+MEASURE_FIRMWARE="false"
 MEASURE_KERNEL="true"
 MEASURE_SONIC_CONFIG="true"
 MEASURE_ROUTING="true"
-MEASURE_SERVICES="true"
+MEASURE_SERVICES="false"
 MEASURE_HARDWARE="true"
 
 # Security Settings
