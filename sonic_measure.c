@@ -832,7 +832,7 @@ int main(int argc, char *argv[])
     char *out_dir = NULL;
     char *log_path = NULL;
     // Default: measure only static components (excluding routing and services which can be dynamic)
-    int components[6] = {1, 1, 1, 0, 0, 1}; // firmware, kernel, sonic, routing, services, hardware
+    int components[6] = {1, 1, 1, 1, 0, 1}; // firmware, kernel, sonic, routing, services, hardware
     int ret_code = 0;
 
     /* Parse command line arguments */

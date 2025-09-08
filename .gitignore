@@ -60,8 +60,9 @@ quote_*/
 /debug.log
 /perf.log
 /debug_tpm.sh
-/tmp
+/verifier/tmp
 
 # database files
 /verifier/reference.yaml
 /verifier/ak.pub
+/verifier/*.txt
