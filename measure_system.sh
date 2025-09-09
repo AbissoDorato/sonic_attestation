@@ -94,7 +94,7 @@ main() {
   # PCR 14 - SONiC CONFIG
   ############################
   log "Extending PCR 14 with SONiC configuration..."
-  extend_pcr "${MEASUREMENTS_DIR}/config_db.txt" "14"
+  extend_pcr "${MEASUREMENTS_DIR}/config_db.json" "14"
 
   ############################
   # PCR 15 - HW & SW BASELINE
@@ -103,6 +103,8 @@ main() {
   
   # Extend with firmware/BIOS info
   extend_pcr "${MEASUREMENTS_DIR}/ifaces.txt" "15"
+  extend_pcr "${MEASUREMENTS_DIR}/bios.txt" "15"
+  extend_pcr "${MEASUREMENTS_DIR}/drivers.txt" "15"
   
   # Extend with kernel info
   #extend_pcr "${MEASUREMENTS_DIR}/kernel.txt" "15"
