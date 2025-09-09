@@ -65,3 +65,4 @@ quote_*/
 # database files
 /verifier/reference.yaml
 /verifier/ak.pub
+/verifier/*.txt
