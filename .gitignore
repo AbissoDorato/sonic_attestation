@@ -66,3 +66,4 @@ quote_*/
 /verifier/reference.yaml
 /verifier/ak.pub
 /verifier/*.txt
+/verifier/pub_keys/*

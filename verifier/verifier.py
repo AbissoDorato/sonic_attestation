@@ -368,7 +368,14 @@ def cmd_enroll_socket(args):
             sys.exit(1)
         
         ak_pub = base64.b64decode(response['ak_pub_b64'])
-        print(sha256_pem(ak_pub))
+        print(f"sha256 of the key{sha256_pem(ak_pub)}")
+        # now we store the ak.pub in the proper directory that is used by the verifier
+        base_tmp = Path(__file__).resolve().parent / "pub_keys"
+        f = open(base_tmp / f"{node}_ak.pub", "wb")
+        f.write(ak_pub)
+        f.close()
+        print(f"AK public key saved to: {base_tmp / f'{node}_ak.pub'}")
+        
         
     finally:
         client.disconnect()
@@ -508,3 +515,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    #  sudo python3 verifier.py verify   --node switch01   --reference-yaml reference.yaml   --pcrs 13,14,15   --ak-pub-path /home/alexr/Desktop/sonic_attestation/verifier/ak.pub
+    #  sudo python3 verifier.py enroll-ak --node switch01   --endpoint
