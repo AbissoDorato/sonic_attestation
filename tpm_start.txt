@@ -1,4 +1,4 @@
-# creation of the dir for the TPM
+# creation for a temporary dir 
 
 mkdir /tmp/mytpm1
 swtpm socket --tpmstate dir=/tmp/mytpm1 \
@@ -19,3 +19,30 @@ qemu-system-x86_64 \
   -monitor stdio \
   sonic-vs.img  
 # tpm2-tools is present tpm2-tss no 
+
+#permanent tpm dir 
+# create a tpmstate permall
+sudo mkdir -p /var/lib/swtpm/mytpm1
+sudo swtpm_setup --tpm2 \
+  --tpmstate /var/lib/swtpm/mytpm1 \
+  --pcr-banks sha256 \
+  --create-ek-cert --create-platform-cert \
+  --lock-nvram
+
+# start the socket with the permantent dir 
+sudo swtpm socket --tpm2 \
+  --tpmstate dir=/var/lib/swtpm/mytpm1 \
+  --ctrl type=unixio,path=/var/lib/swtpm/mytpm1/sock \
+  --log level=20 
+
+#start qemu with the permanent tpm
+sudo qemu-system-x86_64 \
+  -display gtk \
+  -accel kvm -m 4096 -boot d -bios bios-256k.bin -boot menu=on \
+  -chardev socket,id=chrtpm,path=/var/lib/swtpm/mytpm1/sock \
+  -tpmdev emulator,id=tpm0,chardev=chrtpm \
+  -device tpm-tis,tpmdev=tpm0 \
+  -netdev user,id=net0,hostfwd=tcp::8087-:8087 \
+  -device e1000,netdev=net0 \
+  -monitor stdio \
+  sonic-vs.img  

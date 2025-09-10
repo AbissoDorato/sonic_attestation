@@ -145,6 +145,8 @@ class SocketAttestationClient:
 
     def request_attestation(self, node_id, nonce_hex, pcrs=DEFAULT_PCRS):
         """Request attestation quote from the agent."""
+        # node id could also be the tss 
+        print(node_id)
         payload = {
             "node_id": node_id,
             "nonce_hex": nonce_hex,
@@ -199,6 +201,8 @@ def ask_quote_via_socket(node, host, port, nonce_hex, pcrs=DEFAULT_PCRS):
             save_text(tmp / "quote_meta.json", json.dumps(response['quote_meta']))
         if 'pcrs_bin_b64' in response:
             save_bytes(tmp / "pcrs.bin", base64.b64decode(response['pcrs_bin_b64']))
+        if 'ak_tss_sha256' in response:
+            save_bytes(tmp / "ak.tss.sha256", response['ak_tss_sha256'].encode())
         
         print(f"[VERIFIER] Attestation artifacts saved to: {tmp}")
         return tmp
@@ -207,11 +211,33 @@ def ask_quote_via_socket(node, host, port, nonce_hex, pcrs=DEFAULT_PCRS):
         client.disconnect()
 
 # --- Verify signature+nonce using your script ---
-def verify_signature_with_script(verify_script, workdir: Path, ak_pub_env: Path | None = None) -> None:
+def verify_signature_with_script(verify_script, workdir: Path, node_id: str, reference_yaml: Path) -> None:
+    """Verify quote signature using the node-specific AK public key path from reference.yaml."""
     env = os.environ.copy()
-    if ak_pub_env:
-        env["AK_PUB"] = str(ak_pub_env)
+    
+    # Ensure pub_keys directory exists
+    pub_keys_dir = Path(__file__).resolve().parent / "pub_keys"
+    pub_keys_dir.mkdir(exist_ok=True)
+    
+    # Load node config from reference.yaml
+    with open(reference_yaml, 'r') as f:
+        ref = yaml.safe_load(f)
+    
+    node = ref["nodes"].get(node_id)
+    if not node:
+        raise ValueError(f"Node {node_id} not found in reference.yaml")
+    
+    # Get AK public key path - use node-specific file in pub_keys directory
+    ak_pub_path = pub_keys_dir / f"{node_id}_ak.pub"
+    if not ak_pub_path.exists():
+        raise ValueError(f"AK public key file not found: {ak_pub_path}")
+    
+    # Set environment variable for the script
+    env["AK_PUB"] = str(ak_pub_path)
+    
+    # Run verification script
     sh([verify_script, str(workdir)], check=True, env=env)
+
 # --- PCR policy check ---
 def parse_pcrs(pcrs_yaml_path: Path):
     data = load_yaml(pcrs_yaml_path)
@@ -269,7 +295,8 @@ def cmd_verify(args):
         host = endpoint
         port = 8087  # Default port
     
-    expected_ak_sha256 = node["ak_pub_sha256"].lower()
+    #expexted ak tss
+    expected_ak_tss_sha256 = node["ak_tss_sha256"].lower()
 
     # 1) fresh nonce
     nonce_hex = os.urandom(NONCE_LEN).hex()
@@ -279,16 +306,19 @@ def cmd_verify(args):
     if not tmp:
         print("FAIL: Could not get attestation quote")
         sys.exit(1)
+    ak_pub_path = tmp / "ak.pub"
 
     try:
         # 3) verify signature+nonce
         #    also ensure AK pub matches enrollment
-        ak_pub_path = tmp / "ak.pub"
-        if ak_pub_path.exists():
-            ak_hex = sha256_pem(ak_pub_path.read_bytes())
-            if ak_hex != expected_ak_sha256:
-                print(f"FAIL: AK mismatch: expected {expected_ak_sha256}, got {ak_hex}")
+        ak_tss_path = tmp / "ak.tss.sha256"
+        if ak_tss_path.exists():
+            ak_tss_hex = ak_tss_path.read_text().strip().lower()   
+            if ak_tss_hex != expected_ak_tss_sha256:
+                print(f"FAIL: Mismatch in tss. {expected_ak_tss_sha256}, got {ak_tss_hex}")
                 sys.exit(1)
+            else :
+                print(f"AK TSS SHA256 matches enrollment: {ak_tss_hex}")
         
         # Ensure nonce round-trip
         nonce_file = tmp / "nonce.hex"
@@ -300,7 +330,7 @@ def cmd_verify(args):
 
         # Call your verify_quote script
         ak_for_script = ak_pub_path if ak_pub_path.exists() else (Path(args.ak_pub_path) if getattr(args, "ak_pub_path", None) else None)
-        verify_signature_with_script(VERIFY_QUOTE, tmp, ak_for_script)
+        verify_signature_with_script(VERIFY_QUOTE, tmp, args.node, Path(args.reference_yaml))
 
         # 4) policy checks
         pcr_map = parse_pcrs(tmp / "pcrread.txt")
@@ -360,7 +390,14 @@ def cmd_enroll_socket(args):
             sys.exit(1)
         
         ak_pub = base64.b64decode(response['ak_pub_b64'])
-        print(sha256_pem(ak_pub))
+        print(f"sha256 of the key{sha256_pem(ak_pub)}")
+        # now we store the ak.pub in the proper directory that is used by the verifier
+        base_tmp = Path(__file__).resolve().parent / "pub_keys"
+        f = open(base_tmp / f"{node}_ak.pub", "wb")
+        f.write(ak_pub)
+        f.close()
+        print(f"AK public key saved to: {base_tmp / f'{node}_ak.pub'}")
+        
         
     finally:
         client.disconnect()
@@ -500,3 +537,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    #  sudo python3 verifier.py verify   --node switch01   --reference-yaml reference.yaml   --pcrs 13,14,15   --ak-pub-path /home/alexr/Desktop/sonic_attestation/verifier/ak.pub
+    #  sudo python3 verifier.py enroll-ak --node switch01   --endpoint
