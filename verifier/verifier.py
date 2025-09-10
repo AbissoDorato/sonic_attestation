@@ -211,11 +211,33 @@ def ask_quote_via_socket(node, host, port, nonce_hex, pcrs=DEFAULT_PCRS):
         client.disconnect()
 
 # --- Verify signature+nonce using your script ---
-def verify_signature_with_script(verify_script, workdir: Path, ak_pub_env: Path | None = None) -> None:
+def verify_signature_with_script(verify_script, workdir: Path, node_id: str, reference_yaml: Path) -> None:
+    """Verify quote signature using the node-specific AK public key path from reference.yaml."""
     env = os.environ.copy()
-    if ak_pub_env:
-        env["AK_PUB"] = str(ak_pub_env)
+    
+    # Ensure pub_keys directory exists
+    pub_keys_dir = Path(__file__).resolve().parent / "pub_keys"
+    pub_keys_dir.mkdir(exist_ok=True)
+    
+    # Load node config from reference.yaml
+    with open(reference_yaml, 'r') as f:
+        ref = yaml.safe_load(f)
+    
+    node = ref["nodes"].get(node_id)
+    if not node:
+        raise ValueError(f"Node {node_id} not found in reference.yaml")
+    
+    # Get AK public key path - use node-specific file in pub_keys directory
+    ak_pub_path = pub_keys_dir / f"{node_id}_ak.pub"
+    if not ak_pub_path.exists():
+        raise ValueError(f"AK public key file not found: {ak_pub_path}")
+    
+    # Set environment variable for the script
+    env["AK_PUB"] = str(ak_pub_path)
+    
+    # Run verification script
     sh([verify_script, str(workdir)], check=True, env=env)
+
 # --- PCR policy check ---
 def parse_pcrs(pcrs_yaml_path: Path):
     data = load_yaml(pcrs_yaml_path)
@@ -308,7 +330,7 @@ def cmd_verify(args):
 
         # Call your verify_quote script
         ak_for_script = ak_pub_path if ak_pub_path.exists() else (Path(args.ak_pub_path) if getattr(args, "ak_pub_path", None) else None)
-        verify_signature_with_script(VERIFY_QUOTE, tmp, ak_for_script)
+        verify_signature_with_script(VERIFY_QUOTE, tmp, args.node, Path(args.reference_yaml))
 
         # 4) policy checks
         pcr_map = parse_pcrs(tmp / "pcrread.txt")
