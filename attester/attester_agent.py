@@ -170,6 +170,52 @@ class AttestationAgent:
         except Exception as e:
             self.log(f"Error getting AK public key: {e}")
             return None
+        
+    def _get_tss_id(self):
+        """Retrieve the ak.tss.sha256 files if available, else call the script to generate them"""
+        try:
+            tss_paths = ["/var/lib/sonic/attestation/ak.tss.sha256",
+                        "/etc/sonic/attestation/ak.tss.sha256",
+                        "/tmp/ak.tss.sha256"]
+            
+            # First try to find existing TSS ID file
+            for tss_path in tss_paths:
+                if Path(tss_path).exists():
+                    with open(tss_path, 'rb') as f:
+                        return f.read().strip()
+            
+            # If not found, generate it using get_id.sh
+            self.log("No existing TSS ID found, generating new one...")
+            get_id_script = "/usr/local/bin/get_id.sh"
+            
+            if not Path(get_id_script).exists():
+                self.log(f"Error: {get_id_script} not found")
+                return None
+                
+            try:
+                # Run get_id.sh script
+                result = subprocess.run([get_id_script], 
+                                    capture_output=True,
+                                    check=True)
+                
+                # Check if file was generated
+                default_path = "/var/lib/sonic/attestation/ak.tss.sha256"
+                if Path(default_path).exists():
+                    with open(default_path, 'rb') as f:
+                        return f.read()
+                else:
+                    self.log("TSS ID file not generated")
+                    return None
+                    
+            except subprocess.CalledProcessError as e:
+                self.log(f"Error running get_id.sh: {e}")
+                self.log(f"stdout: {e.stdout}")
+                self.log(f"stderr: {e.stderr}")
+                return None
+                
+        except Exception as e:
+            self.log(f"Error getting TSS ID: {e}")
+            return None
 
     def _load_file_safe(self, filepath, binary=False):
         """Safely load a file, returning None if it doesn't exist."""
@@ -264,6 +310,8 @@ class AttestationAgent:
             nonce_echo = self._load_file_safe(outdir / "nonce.hex")
             ak_pub = self._get_ak_pubkey()
             
+            ak_tss = self._get_tss_id()
+            
             # Create metadata
             metadata = self._create_quote_metadata(outdir)
             
@@ -291,6 +339,11 @@ class AttestationAgent:
             
             if ak_pub:
                 response["ak_pub_b64"] = base64.b64encode(ak_pub).decode('utf-8')
+                
+            if ak_tss:
+                response["ak_tss_sha256"] = ak_tss.decode('utf-8')
+            else:
+                self.log("Warning: ak.tss.sha256 not found or empty")
             
             # Add text data
             if pcrs_yaml:

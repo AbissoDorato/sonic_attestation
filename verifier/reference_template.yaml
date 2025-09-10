@@ -4,7 +4,7 @@ nodes:
   switch01:
     endpoint: "127.0.0.1"
     transport: "ssh"
-    ak_pub_sha256: "PK_HASH"
+    ak_tss_sha256: "PK_HASH"
     policy: "baseline-v1"
 
 policies:

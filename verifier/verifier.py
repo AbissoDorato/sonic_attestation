@@ -145,6 +145,8 @@ class SocketAttestationClient:
 
     def request_attestation(self, node_id, nonce_hex, pcrs=DEFAULT_PCRS):
         """Request attestation quote from the agent."""
+        # node id could also be the tss 
+        print(node_id)
         payload = {
             "node_id": node_id,
             "nonce_hex": nonce_hex,
@@ -199,6 +201,8 @@ def ask_quote_via_socket(node, host, port, nonce_hex, pcrs=DEFAULT_PCRS):
             save_text(tmp / "quote_meta.json", json.dumps(response['quote_meta']))
         if 'pcrs_bin_b64' in response:
             save_bytes(tmp / "pcrs.bin", base64.b64decode(response['pcrs_bin_b64']))
+        if 'ak_tss_sha256' in response:
+            save_bytes(tmp / "ak.tss.sha256", response['ak_tss_sha256'].encode())
         
         print(f"[VERIFIER] Attestation artifacts saved to: {tmp}")
         return tmp
@@ -269,7 +273,8 @@ def cmd_verify(args):
         host = endpoint
         port = 8087  # Default port
     
-    expected_ak_sha256 = node["ak_pub_sha256"].lower()
+    #expexted ak tss
+    expected_ak_tss_sha256 = node["ak_tss_sha256"].lower()
 
     # 1) fresh nonce
     nonce_hex = os.urandom(NONCE_LEN).hex()
@@ -279,16 +284,19 @@ def cmd_verify(args):
     if not tmp:
         print("FAIL: Could not get attestation quote")
         sys.exit(1)
+    ak_pub_path = tmp / "ak.pub"
 
     try:
         # 3) verify signature+nonce
         #    also ensure AK pub matches enrollment
-        ak_pub_path = tmp / "ak.pub"
-        if ak_pub_path.exists():
-            ak_hex = sha256_pem(ak_pub_path.read_bytes())
-            if ak_hex != expected_ak_sha256:
-                print(f"FAIL: AK mismatch: expected {expected_ak_sha256}, got {ak_hex}")
+        ak_tss_path = tmp / "ak.tss.sha256"
+        if ak_tss_path.exists():
+            ak_tss_hex = ak_tss_path.read_text().strip().lower()   
+            if ak_tss_hex != expected_ak_tss_sha256:
+                print(f"FAIL: Mismatch in tss. {expected_ak_tss_sha256}, got {ak_tss_hex}")
                 sys.exit(1)
+            else :
+                print(f"AK TSS SHA256 matches enrollment: {ak_tss_hex}")
         
         # Ensure nonce round-trip
         nonce_file = tmp / "nonce.hex"
